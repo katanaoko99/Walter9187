@@ -1,0 +1,72 @@
+
+name: nexus node auto restart
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-nexus-node:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup 14GB Swap
+        run: |
+          sudo fallocate -l 18G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+          free -h
+
+      - name: System Info
+        run: |
+          echo "=== system info ==="
+          lscpu | grep 'Model name'
+          echo "RAM:"
+          free -h
+          echo "Disk:"
+          df -h /
+          echo "==================="
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y pkg-config libssl-dev build-essential clang cmake
+          
+      - name: Clone Nexus CLI v0.10.14 + Git config + create branch
+        run: |
+          git clone https://github.com/nexus-xyz/nexus-cli.git nexus-cli
+          cd nexus-cli
+          git fetch --all --tags
+          git config --global user.email "vuvietthangz121@gmail.com"
+          git config --global user.name "thangz121"
+          git checkout -b v0.10.14-pr1991 v0.10.14
+
+      - name: Merge PR #1991
+        run: |
+          cd nexus-cli
+          git fetch origin pull/1991/head:pr-1991
+          git merge pr-1991 --no-ff -m "merge PR #1991 into v0.10.14"
+
+      - name: Patch setup.rs line 102
+        run: |
+          cd nexus-cli/clients/cli/src/session
+          sed -i '102s/.*/let num_workers: usize = max_threads.unwrap_or(1).clamp(1, 12) as usize;/' setup.rs
+
+      - name: Build Nexus CLI
+        run: |
+          cd nexus-cli/clients/cli
+          cargo build --release
+
+      - name: Start Nexus Node
+        run: |
+          echo "=== starting nexus node at $(date) ==="
+          cd nexus-cli/clients/cli
+          ./target/release/nexus-network start --node-id 37230781 --max-threads 4 --max-difficulty extra_large_4 --headless
